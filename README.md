@@ -29,6 +29,10 @@ your_project_folder/
 
 ## 🚀 Try It Yourself
 
+- Here's the link to the app: ([Streamlit app.](https://machfrum-week-3-a-i-for-s-e-webapp-zbdbqr.streamlit.app/))
+
+---
+
 ### 1. Install Requirements
 
 ```sh

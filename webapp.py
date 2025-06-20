@@ -1,242 +1,198 @@
-# webapp.py (Final Version with Correct Indentation)
-
 import streamlit as st
 import torch
-import torch.nn as nn
 import numpy as np
 import cv2
-from PIL import Image
-from torchvision import transforms
 import os
+from torchvision import transforms
+import matplotlib.pyplot as plt
+import seaborn as sns
+import io
+from PIL import Image
 
+# --- Define the model class (should match your notebook definition) ---
+import torch.nn as nn
 class RobustCNN(nn.Module):
     def __init__(self):
         super(RobustCNN, self).__init__()
         self.feature_extractor = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, padding=1),
+            nn.Conv2d(1, 32, 3, padding=1),
             nn.BatchNorm2d(32),
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.MaxPool2d(2,2),
+            nn.Conv2d(32, 64, 3, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2)
+            nn.MaxPool2d(2,2)
         )
         self.adaptive_pool = nn.AdaptiveAvgPool2d((7, 7))
         self.classifier = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(64 * 7 * 7, 128),
+            nn.Linear(64*7*7, 128),
             nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.Dropout(0.5),
             nn.Linear(128, 10)
         )
-
     def forward(self, x):
         x = self.feature_extractor(x)
         x = self.adaptive_pool(x)
         x = self.classifier(x)
         return x
 
-class ImageQualityValidator:
-    def __init__(self):
-        self.ROTATION_THRESHOLD = 20
-        self.NOISE_THRESHOLD = 1500
-
-    def _check_rotation(self, image):
-        contours, _ = cv2.findContours((image > 0.1).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            return None
-
-        _, _, angle = cv2.minAreaRect(max(contours, key=cv2.contourArea))
-        if angle < -45:
-            angle = 90 + angle
-
-        if abs(angle) > self.ROTATION_THRESHOLD:
-            return f"Digit may be rotated by ~{abs(angle):.0f} degrees."
-        
-        return None
-
-    def _check_noise_and_blur(self, image):
-        laplacian_var = cv2.Laplacian((image * 255).astype(np.uint8), cv2.CV_64F).var()
-        if laplacian_var < 100:
-            return f"Image may be blurry (var: {laplacian_var:.0f})."
-        
-        if laplacian_var > self.NOISE_THRESHOLD:
-            return f"Image may be noisy (var: {laplacian_var:.0f})."
-        
-        return None
-
-    def run(self, image_np):
-        warnings = []
-        if image_np.max() > 1.0:
-            image_np = image_np / 255.0
-
-        checks = [self._check_rotation, self._check_noise_and_blur]
-        for check_func in checks:
-            result = check_func(image_np)
-            if result:
-                warnings.append(result)
-        
-        return warnings
-
 @st.cache_resource
 def load_model(model_path):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu")
     model = RobustCNN().to(device)
-    try:
-        model.load_state_dict(torch.load(model_path, map_location=device))
-        model.eval()
-        return model, device
-    except FileNotFoundError:
-        st.error(f"Model file not found at {model_path}.")
-        return None, None
+    state_dict = torch.load(model_path, map_location=device)
+    model.load_state_dict(state_dict)
+    model.eval()
+    return model
 
-def segment_and_preprocess_digits(image_pil, use_otsu, threshold_value):
-    img_gray = np.array(image_pil.convert('L'))
-    
-    if use_otsu:
-        _, img_binary = cv2.threshold(img_gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
-    else:
-        _, img_binary = cv2.threshold(img_gray, threshold_value, 255, cv2.THRESH_BINARY_INV)
-        
-    contours, _ = cv2.findContours(img_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    detected_digits = []
-    for c in contours:
-        if cv2.contourArea(c) > 25:
-            x, y, w, h = cv2.boundingRect(c)
-            if 0.1 < w/h < 2.0:
-                detected_digits.append({'bbox': (x, y, w, h)})
+# --- Helper functions ---
 
-    if not detected_digits:
-        return []
+def segment_digits(image):
+    # image: numpy array (H, W, 3)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape)==3 else image
+    blur = cv2.GaussianBlur(gray, (5,5), 0)
+    thresh = cv2.adaptiveThreshold(
+        blur, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY_INV, 11, 5)
+    morph = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, np.ones((3,3), np.uint8))
+    contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    digits = []
+    bboxes = []
+    for cnt in contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+        if w*h > 100:
+            roi = morph[y:y+h, x:x+w]
+            roi = cv2.resize(roi, (28, 28), interpolation=cv2.INTER_AREA)
+            digits.append(roi)
+            bboxes.append((x, y, w, h))
+    # Sort left to right
+    bboxes, digits = zip(*sorted(zip(bboxes, digits), key=lambda t: t[0][0])) if digits else ([],[])
+    return list(digits), list(bboxes)
 
-    detected_digits.sort(key=lambda item: item['bbox'][0])
-    processed_digits = []
-    for digit in detected_digits:
-        x, y, w, h = digit['bbox']
-        img_digit_only = img_gray[y:y+h, x:x+w]
-        canvas = np.zeros((max(w, h) + 20, max(w, h) + 20), dtype=np.uint8)
-        start_x, start_y = (canvas.shape[1] - w) // 2, (canvas.shape[0] - h) // 2
-        canvas[start_y:start_y+h, start_x:start_x+w] = img_digit_only
-        final_image = cv2.resize(canvas, (28, 28), interpolation=cv2.INTER_AREA)
-        transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
-        img_tensor = transform(final_image).unsqueeze(0)
-        processed_digits.append({'tensor': img_tensor, 'image': final_image})
-    return processed_digits
+def classify_digit_rois(digits, model):
+    device = torch.device("cpu")
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.1307,), (0.3081,))
+    ])
+    model.eval()
+    results = []
+    for roi in digits:
+        tensor = transform(roi).unsqueeze(0).to(device)
+        with torch.no_grad():
+            out = model(tensor)
+            pred = out.argmax(dim=1).item()
+            confidence = torch.softmax(out, 1)[0, pred].item()
+        results.append((pred, confidence))
+    return results
 
-def run_prediction(model, device, image_tensor):
-    with torch.no_grad():
-        output = model(image_tensor.to(device))
-        probabilities = torch.nn.functional.softmax(output, dim=1)
-        confidence, prediction = torch.max(probabilities, 1)
-    return prediction.item(), confidence.item()
+def plot_confusion_matrix(cm):
+    fig, ax = plt.subplots(figsize=(6,5))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=range(10), yticklabels=range(10), ax=ax)
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.title('Confusion Matrix')
+    st.pyplot(fig)
 
-def initialize_state():
-    if 'initial_results' not in st.session_state:
-        st.session_state.initial_results = None
-    if 'retry_results' not in st.session_state:
-        st.session_state.retry_results = None
-    if 'uploaded_file' not in st.session_state:
-        st.session_state.uploaded_file = None
+def analyze_and_visualize(all_targets, all_preds):
+    import pandas as pd
+    from sklearn.metrics import classification_report, confusion_matrix
+    cm = confusion_matrix(all_targets, all_preds)               
+    plot_confusion_matrix(cm)
+    report = classification_report(all_targets, all_preds, output_dict=True, digits=3)
+    st.write('### Detailed Classification Report (Latest)')
+    df = pd.DataFrame(report).transpose()
+    st.dataframe(df)
 
-def reset_session():
-    st.session_state.initial_results = None
-    st.session_state.retry_results = None
-    st.session_state.uploaded_file = None
+# --- Streamlit UI: App Layout ---
 
-def display_results(title, results_list, container):
-    if not results_list:
-        return
-    final_str = "".join([str(res['prediction']) for res in results_list])
-    container.header(title)
-    container.success(f"Detected Digits: **{final_str}**")
-    container.code(final_str, language="text")
-    tab_titles = [f"Digit #{i+1} (Pred: {res['prediction']})" for i, res in enumerate(results_list)]
-    tabs = container.tabs(tab_titles)
-    for i, res in enumerate(results_list):
-        with tabs[i]:
-            st.metric(f"Prediction", value=f"{res['prediction']}", delta=f"{res['confidence']:.2%} confidence")
-            st.image(res['image'], caption=f"Processed image for Digit #{i+1}")
-            st.subheader("Quality Validation")
-            if not res['warnings']:
-                st.success("✅ No quality issues detected.")
-            else:
-                for warning in res['warnings']:
-                    st.warning(warning)
-
-# --- Streamlit UI ---
-st.set_page_config(layout="wide", page_title="Interactive Digit Recognizer")
-initialize_state()
-
-with st.sidebar:
-    st.header("About This App")
-    st.write("This app demonstrates an interactive multi-digit recognition pipeline.")
-    st.subheader("Components:")
-    st.markdown("- **Digit Segmentation:** Uses OpenCV to find digits.")
-    st.markdown("- **`RobustCNN` (`Arya`):** Classifies each segmented digit.")
-    st.markdown("- **`ImageQualityValidator` (`Jaqen`):** Checks each digit for quality issues.")
-    st.divider()
-    st.write("Built by GROUP 29.")
-
-st.title("🤖 Interactive Multi-Digit Recognizer")
-st.markdown("Upload an image with handwritten digits. You can then 'Retry' with different settings to improve the result.")
+st.set_page_config(page_title="Multi-digit MNIST OCR", layout="centered")
+st.title("🖼️ Multi-Digit Handwritten Number Recognition")
+st.markdown(
+    """
+    Upload your photo of handwritten or printed digits. 
+    The system will extract, classify, and display all detected numbers.
+    """
+)
 
 MODEL_PATH = "models/mnist_robust_cnn.pth"
-model, device = load_model(MODEL_PATH)
-validator = ImageQualityValidator()
+if not os.path.exists(MODEL_PATH):
+    st.error(f"Could not find model at {MODEL_PATH}. Please train and save your model first.")
+    st.stop()
 
-col1, col2 = st.columns([1, 1])
-with col1:
-    uploaded_file = st.file_uploader("Choose an image...", type=["png", "jpg", "jpeg"])
-with col2:
-    st.write("") 
-    st.button("Clear All & Reset", on_click=reset_session, use_container_width=True)
+with st.status("Initialising Model...", expanded=True) as status:
+    model = load_model(MODEL_PATH)
+    st.write("Model loaded and ready.")
+    status.update(label="Model loaded.", state="complete")
 
-if uploaded_file is not None:
-    st.session_state.uploaded_file = uploaded_file
+# --- Optionally show last model analytics (run this block once offline and paste results here) ---
+if "analytics" not in st.session_state:
+    # Load last test analytics if available (adapt to your storage method)
+    # If you want to skip this live, comment this block.
+    try:
+        import pickle
+        with open("mnist_test_preds_targets.pkl", "rb") as f:
+            preds, targets = pickle.load(f)
+        st.session_state.analytics = (targets, preds)
+    except Exception:
+        st.session_state.analytics = None
 
-if st.session_state.uploaded_file:
-    image = Image.open(st.session_state.uploaded_file)
-    st.image(image, caption="Current Uploaded Image", width=400)
+if st.session_state.analytics:
+    st.header("📊 Model Test Performance")
+    analyze_and_visualize(*st.session_state.analytics)
+    st.markdown("---")
+
+# ---------------- Upload & Inference --------------------
+uploaded = st.file_uploader("Upload a digit image (jpg, png, etc.)", type=['jpg','jpeg','png'])
+if uploaded:
+    image_bytes = uploaded.read()
+    pil_image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+    cv_img = np.array(pil_image)[..., ::-1]
+    st.image(pil_image, caption="Uploaded image", use_container_width=True)
     
-    if st.session_state.initial_results is None:
-        with st.spinner("Running initial analysis..."):
-            segmented_digits = segment_and_preprocess_digits(image, use_otsu=True, threshold_value=128)
-            if segmented_digits:
-                results = []
-                for digit_data in segmented_digits:
-                    pred, conf = run_prediction(model, device, digit_data['tensor'])
-                    warnings = validator.run(digit_data['image'])
-                    results.append({'prediction': pred, 'confidence': conf, 'warnings': warnings, 'image': digit_data['image']})
-                st.session_state.initial_results = results
+    phases = ["Preprocessing", "Digit Segmentation", "Digit Classification", "Generating Result"]
+    
+    with st.status("Processing...", expanded=True) as phase_status:
+        # Everything in this block (lines below) must be indented!
 
-    if st.session_state.initial_results:
-        display_results("Initial Pass (Automatic Settings)", st.session_state.initial_results, st)
-
-        st.divider()
-        st.header("⚙️ Retry with Manual Settings")
-        st.info("If the initial result is incorrect, adjust the threshold to change how the model separates digits from the background, then click 'Retry'.")
+        st.write(":hourglass: Preprocessing image ...")
+        phase_status.update(label=f"{phases[0]} done.", state="running")
         
-        retry_threshold = st.slider("Segmentation Threshold", 0, 255, 128)
-        
-        if st.button("Retry Analysis"):
-            with st.spinner("Re-analyzing with manual settings..."):
-                segmented_digits = segment_and_preprocess_digits(image, use_otsu=False, threshold_value=retry_threshold)
-                if segmented_digits:
-                    results = []
-                    for digit_data in segmented_digits:
-                        pred, conf = run_prediction(model, device, digit_data['tensor'])
-                        warnings = validator.run(digit_data['image'])
-                        results.append({'prediction': pred, 'confidence': conf, 'warnings': warnings, 'image': digit_data['image']})
-                    st.session_state.retry_results = results
-                else:
-                    st.session_state.retry_results = []
+        digits, bboxes = segment_digits(cv_img)
+        st.write(f":mag_right: Found {len(digits)} digit-like regions.")
+        phase_status.update(label=f"{phases[1]} done.", state="running")
+        if len(digits) == 0:
+            st.warning("No digits found in this image. Try a clearer/cropped sample.")
+            st.stop()
 
-    if st.session_state.retry_results is not None:
-        if not st.session_state.retry_results:
-            st.warning("No digits were found with the current manual threshold setting.")
-        else:
-            display_results("Retry Pass (Manual Settings)", st.session_state.retry_results, st)
-else:
-    st.info("Upload an image to begin.")
+        results = classify_digit_rois(digits, model)
+        st.write(f":pencil: Recognized {len(results)} digits.")
+        phase_status.update(label=f"{phases[2]} done.", state="running")
+
+        predicted_str = ''.join(str(result[0]) for result in results)
+        st.write(f":clipboard: Recognized number sequence: **{predicted_str}**")
+        phase_status.update(label=f"{phases[3]}", state="complete")
+
+    # Now, OUTSIDE the 'with' block, dedent
+    draw_img = cv_img.copy()
+    for (digit, conf), (x, y, w, h) in zip(results, bboxes):
+        cv2.rectangle(draw_img, (x, y), (x+w, y+h), (0,255,0), 2)
+        cv2.putText(draw_img, str(digit), (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (220,20,60), 2)
+    st.image(draw_img[..., ::-1], caption="Detected digits", use_container_width=True)
+
+    st.markdown("### 📋 Copy Recognized Numbers")
+    st.code(predicted_str, language=None)
+
+    import pandas as pd
+    digits_table = pd.DataFrame(
+        [(str(d), f"{conf:.2f}") for d, conf in results],
+        columns=["Digit", "Confidence"]
+    )
+    st.dataframe(digits_table, use_container_width=True)
+
+st.markdown("---")
+st.markdown("Made by Peter Macharia. Powered by PyTorch & Streamlit.")

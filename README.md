@@ -19,8 +19,6 @@ Arya is a cutting-edge digit recognition system built in PyTorch, designed not j
 ```
 your_project_folder/
 ├── Arya.ipynb
-├── Fairness_Analysis.ipynb
-├── Quality_Checker.ipynb
 ├── webapp.py               
 │
 └── models/

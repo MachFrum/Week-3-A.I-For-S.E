@@ -12,13 +12,14 @@
 9. [Named Entity Extraction](#named-entity-extraction)  
 10. [Rule‑Based Sentiment Analysis](#rule-based-sentiment-analysis)  
 11. [Visualization](#visualization)  
-12. [Insights & Next Steps](#insights--next-steps)  
+12. [Insights](#insights)
+13. [Next Steps](#Next-steps)  
+  
 
 ---
 
 ## Introduction  
-This project demonstrates a complete workflow for analyzing Amazon review text: from downloading raw data to extracting product/brand entities and performing a simple rule‑based sentiment analysis. Along the way, we explore data quality, engineer features, and visualize our findings.  
-> **Opinion:** Splitting the workflow into clear sections makes collaboration and reproducibility far easier.  
+This project demonstrates a complete workflow for analyzing Amazon review text: from downloading raw data to extracting product/brand entities and performing a simple rule‑based sentiment analysis. Along the way, we explore data quality, engineer features, and visualize our findings.   
 
 ## Setup & Installation  
 ```bash
@@ -85,7 +86,7 @@ print(df_train.describe())
   * DataFrame schema, missing values, summary stats.
 * **Why:** Early assessment of data types and completeness guides cleaning steps.
 
-> **Insight:** Detecting zero nulls here suggests complete records, but textual cleanliness still matters.
+> **Som insight:** Detecting zero nulls here suggests complete records, but textual cleanliness still matters.
 
 ## Data Cleaning & Formatting
 
@@ -115,8 +116,6 @@ df_train['word_count'] = df_train['review_text'].apply(
 * **What’s done:** Computes per‑review word count.
 * **Why:** Word length often correlates with review detail and sentiment intensity.
 
-> **Opinion:** A single feature like word count is simple yet can be surprisingly predictive in baseline models.
-
 ## Named Entity Extraction
 
 ```python
@@ -139,7 +138,7 @@ products = extract_entities(df_train['review_text'].sample(500))
   * Extracts `PRODUCT` and `ORG` entities from review samples.
 * **Why:** Identifying product or brand mentions can reveal popularity and pain points.
 
-> **Insight:** Scaling to large datasets benefits from `nlp.pipe` batching for speed.
+> **Some Insight:** Scaling to large datasets benefits from `nlp.pipe` batching for speed.
 
 ## Rule‑Based Sentiment Analysis
 
@@ -165,8 +164,6 @@ df_train['predicted_sentiment'] = \
   * Labels reviews by comparing positive vs. negative word counts.
 * **Why:** Rule‑based approaches are interpretable and serve as quick baselines before more complex models.
 
-> **Opinion:** While basic, lexicon methods expose glaring sentiment shifts and help validate more advanced models later.
-
 ## Visualization
 
 ```python
@@ -188,9 +185,14 @@ plt.show()
 * **What’s done:** Plots count and length distributions.
 * **Why:** Visual checks quickly highlight class imbalances and outliers.
 
-## Insights & Next Steps
+## Insights.
 
 * **Entity Trends:** Common brands (e.g., “Apple”, “Samsung”) often skew positive—consider brand‑specific sentiment modeling.
 * **Lexicon Limitations:** Rule‑based sentiment misses context (e.g., “not bad”). A next step is to integrate pretrained transformers or VADER for nuanced polarity.
+
+ ## Next Steps.
 * **Scalability:** For production, move from in‑memory Pandas to Dask or Spark when handling millions of reviews.
 * **Advanced Features:** Incorporate TF‑IDF, embeddings, or topic modeling to uncover deeper themes.
+
+## LICENSE.
+* This was a study project by group 29 PLP, feel free to have fun with it.

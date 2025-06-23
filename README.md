@@ -130,7 +130,6 @@ Pull requests welcome! Please see the [CONTRIBUTING.md](CONTRIBUTING.md) if you 
 2. Yvette Jane Lando - GM
 3. Magdalene Thuo - GM
 4. Njeri Macharia - GM
-5. 
 
 ---
 
